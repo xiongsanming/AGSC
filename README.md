@@ -1,6 +1,6 @@
 # AGSC of AI-Generated Image Detection
 
-Use `demo.py` script to detect a single image.
+Use `demo.py` script to detect a single image, with the provided weights in folder model_weights.
 
 ```bash
 python demo.py  --lora_adapter_dir model_weights/ --head_weights_path model_weights/head_weights.pth --image_path test_img.png 
