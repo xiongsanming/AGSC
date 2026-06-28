@@ -119,13 +119,31 @@ class CAIDArrowDataset(Dataset):
         if not arrow_paths:
             raise ValueError(f"在 {root_dir} 中未找到 test.arrow 文件！")
 
-        print(f"📦 加载 {len(arrow_paths)} 个 Arrow 文件 (内存映射)...")
-        for path in arrow_paths:
-            mmap = pa.memory_map(path, 'r')
-            table = pa.ipc.open_file(mmap).read_all()
-            self.tables.append(table)
-            self.offsets.append(self.total_length)
-            self.total_length += table.num_rows
+        print(f"📦 发现 {len(arrow_paths)} 个 Arrow 文件，正在自适应加载...")
+        
+        for path in tqdm(arrow_paths, desc="解析 Arrow"):
+            try:
+                # 使用 OSFile 代替 memory_map，避免内存映射的锁问题
+                with pa.OSFile(path, 'rb') as f:
+                    try:
+                        # 尝试 1：按标准的 IPC File 格式读取
+                        table = pa.ipc.open_file(f).read_all()
+                    except pa.lib.ArrowInvalid:
+                        # 尝试 2：核心修复！如果报错，回退到按 IPC Stream 格式读取
+                        f.seek(0) # 将文件指针重置回开头
+                        table = pa.ipc.open_stream(f).read_all()
+                        
+                self.tables.append(table)
+                self.offsets.append(self.total_length)
+                self.total_length += table.num_rows
+                
+            except Exception as e:
+                tqdm.write(f"\n⚠️ 警告: {path} 读取彻底失败。报错: {e}")
+
+        print(f"✅ 成功加载完成！总共提取到图片: {self.total_length} 张。")
+
+        if self.total_length == 0:
+            raise RuntimeError("加载失败，未能读取到任何图片！")
 
     def __len__(self):
         return self.total_length
@@ -140,10 +158,11 @@ class CAIDArrowDataset(Dataset):
         local_idx = idx - self.offsets[table_idx]
         table = self.tables[table_idx]
 
+        # 读取图片二进制流
         img_bytes = table['image'][local_idx].as_buffer()
         img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
 
-        # 🌟 核心：统一标签，0=真实照片，1=AI生成
+        # 统一标签：CAID 是 0=fake, 1=real；我们需要转成 0=real, 1=fake
         original_label = table['label'][local_idx].as_py()
         label = 1 - original_label 
 
